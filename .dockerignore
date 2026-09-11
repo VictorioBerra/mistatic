@@ -2,4 +2,3 @@ node_modules
 .svelte-kit
 build
 backend/pb_data
-backend/pb_migrations
