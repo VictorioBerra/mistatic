@@ -1,19 +1,64 @@
 package helpers
 
 import (
-	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"net/url"
+	"sync"
 	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 )
+
+const siteRouteCacheTTL = 5 * time.Minute
+
+type siteRoute struct {
+	siteID                string
+	userID                string
+	deploymentID          string
+	spaFallback           bool
+	isPublic              bool
+	disableRequestLogging bool
+}
+
+type siteRouteCacheEntry struct {
+	route     siteRoute
+	expiresAt time.Time
+}
+
+var siteRoutes = struct {
+	sync.RWMutex
+	entries    map[string]siteRouteCacheEntry
+	generation uint64
+}{
+	entries: make(map[string]siteRouteCacheEntry),
+}
+
+func RegisterSiteRouteCacheHooks(app core.App) {
+	invalidate := func(e *core.RecordEvent) error {
+		err := e.Next()
+		if err == nil {
+			clearSiteRouteCache()
+		}
+		return err
+	}
+
+	app.OnRecordAfterCreateSuccess("sites", "custom_domains").BindFunc(invalidate)
+	app.OnRecordAfterUpdateSuccess("sites", "custom_domains").BindFunc(invalidate)
+	app.OnRecordAfterDeleteSuccess("sites", "custom_domains").BindFunc(invalidate)
+}
+
+func clearSiteRouteCache() {
+	siteRoutes.Lock()
+	siteRoutes.entries = make(map[string]siteRouteCacheEntry)
+	siteRoutes.generation++
+	siteRoutes.Unlock()
+}
 
 func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 	appDomain := os.Getenv("APP_DOMAIN")
@@ -33,19 +78,30 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 		if strings.Contains(host, ":") {
 			host = strings.Split(host, ":")[0]
 		}
-		
+
 		token := e.Request.FormValue("token")
 		if token == "" {
 			return e.String(http.StatusBadRequest, "Missing token")
 		}
 
-		var siteRecord *core.Record
+		var siteID string
+		var userID string
 		var err error
 		siteParam := e.Request.URL.Query().Get("site")
 		if siteParam != "" {
+			var siteRecord *core.Record
 			siteRecord, err = e.App.FindRecordById("sites", siteParam)
+			if err == nil {
+				siteID = siteRecord.Id
+				userID = siteRecord.GetString("user")
+			}
 		} else {
-			siteRecord, err = resolveHostToSite(e.App, host, rootDomain)
+			var route *siteRoute
+			route, err = resolveHostToSite(e.App, host, rootDomain)
+			if err == nil {
+				siteID = route.siteID
+				userID = route.userID
+			}
 		}
 
 		if err != nil {
@@ -53,7 +109,7 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 		}
 
 		authRecord, err := e.App.FindAuthRecordByToken(token, core.TokenTypeAuth)
-		if err != nil || authRecord.Id != siteRecord.GetString("user") {
+		if err != nil || authRecord.Id != userID {
 			return e.String(http.StatusForbidden, "Invalid token or you do not own this site")
 		}
 
@@ -62,13 +118,13 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 		cookie.Value = token
 		cookie.Path = "/"
 		cookie.HttpOnly = true
-		
+
 		// In dev we don't force secure cookie unless HTTPS
 		if e.Request.TLS != nil || e.Request.Header.Get("X-Forwarded-Proto") == "https" {
 			cookie.Secure = true
 			cookie.SameSite = http.SameSiteNoneMode
 		}
-		
+
 		http.SetCookie(e.Response, cookie)
 
 		returnTo := e.Request.URL.Query().Get("returnTo")
@@ -80,13 +136,13 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 
 	se.Router.GET("/{path...}", func(e *core.RequestEvent) error {
 		start := time.Now()
-		
+
 		host := e.Request.Host
 		if strings.Contains(host, ":") {
 			host = strings.Split(host, ":")[0]
 		}
 
-		var siteRecord *core.Record
+		var route *siteRoute
 		var isSubpathSite bool
 		var subpathPrefix string
 
@@ -97,9 +153,9 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 				parts := strings.SplitN(reqPath, "/", 4)
 				if len(parts) >= 3 {
 					subdomain := parts[2]
-					site, err := e.App.FindFirstRecordByFilter("sites", "subdomain = {:sub}", dbx.Params{"sub": subdomain})
+					site, err := findSiteBySubdomain(e.App, subdomain)
 					if err == nil {
-						siteRecord = site
+						route = site
 						isSubpathSite = true
 						subpathPrefix = "/site/" + subdomain
 
@@ -110,26 +166,26 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 				}
 			}
 
-			if siteRecord == nil {
+			if route == nil {
 				return dashboardHandler(e)
 			}
 		}
 
-		if siteRecord == nil {
+		if route == nil {
 			var err error
-			siteRecord, err = resolveHostToSite(e.App, host, rootDomain)
+			route, err = resolveHostToSite(e.App, host, rootDomain)
 			if err != nil {
 				return e.String(http.StatusNotFound, "Site not found or inactive")
 			}
 		}
-		
+
 		// Fire and forget logging
 		defer func() {
-			if siteRecord != nil {
+			if route != nil {
 				// Check if logging is disabled for this site
-				if !siteRecord.GetBool("disable_request_logging") {
+				if !route.disableRequestLogging {
 					duration := time.Since(start).Milliseconds()
-					
+
 					// Determine real IP
 					ip := e.Request.Header.Get("CF-Connecting-IP")
 					if ip == "" {
@@ -149,14 +205,14 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 
 					payload := LogPayload{
 						App:        e.App,
-						SiteID:     siteRecord.Id,
+						SiteID:     route.siteID,
 						Method:     e.Request.Method,
 						Path:       reqPath,
 						IP:         ip,
 						UserAgent:  e.Request.UserAgent(),
 						DurationMs: duration,
 					}
-					
+
 					select {
 					case LogQueue <- payload:
 						// Successfully queued
@@ -167,20 +223,20 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			}
 		}()
 
-		siteID := siteRecord.Id
-		spaFallback := siteRecord.GetBool("spa_fallback")
-		isPublic := siteRecord.GetBool("is_public")
+		siteID := route.siteID
+		spaFallback := route.spaFallback
+		isPublic := route.isPublic
 
 		if !isPublic {
 			// Check cookie
 			cookie, err := e.Request.Cookie("mistatic_auth")
-			
+
 			needsAuth := false
 			if err != nil || cookie.Value == "" {
 				needsAuth = true
 			} else {
 				authRecord, authErr := e.App.FindAuthRecordByToken(cookie.Value, core.TokenTypeAuth)
-				if authErr != nil || authRecord.Id != siteRecord.GetString("user") {
+				if authErr != nil || authRecord.Id != route.userID {
 					needsAuth = true
 				}
 			}
@@ -190,9 +246,9 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 				if e.Request.TLS != nil || e.Request.Header.Get("X-Forwarded-Proto") == "https" {
 					scheme = "https://"
 				}
-				
+
 				redirectUrl := scheme + e.Request.Host + "/xapi/sso-callback?site=" + siteID + "&returnTo=" + url.QueryEscape(reqPath)
-				
+
 				dashboardURL := os.Getenv("SSO_DASHBOARD_URL")
 				if dashboardURL == "" {
 					appHost := appDomain
@@ -206,14 +262,14 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			}
 		}
 
-		deploymentID, err := getActiveDeployment(e.App, siteID)
-		if err != nil {
+		deploymentID := route.deploymentID
+		if deploymentID == "" {
 			return e.HTML(http.StatusOK, defaultSiteHTML(host))
 		}
 
 		cwd, _ := os.Getwd()
 		siteDir := filepath.Join(cwd, "..", "sites", siteID, deploymentID)
-		
+
 		if isSubpathSite {
 			reqPath = strings.TrimPrefix(reqPath, subpathPrefix)
 			if !strings.HasPrefix(reqPath, "/") {
@@ -224,7 +280,7 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 		if reqPath == "/" {
 			reqPath = "/index.html"
 		}
-		
+
 		fullPath := filepath.Join(siteDir, reqPath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) && spaFallback {
 			fullPath = filepath.Join(siteDir, "index.html")
@@ -235,40 +291,81 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 	})
 }
 
-func resolveHostToSite(app core.App, host string, rootDomain string) (*core.Record, error) {
+func resolveHostToSite(app core.App, host string, rootDomain string) (*siteRoute, error) {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	rootDomain = strings.ToLower(strings.TrimSuffix(rootDomain, "."))
+
+	if route, ok := getCachedSiteRoute(host); ok {
+		return route, nil
+	}
+
+	siteRoutes.RLock()
+	generation := siteRoutes.generation
+	siteRoutes.RUnlock()
+
+	var record *core.Record
+	var err error
 	if strings.HasSuffix(host, "."+rootDomain) {
 		subdomain := strings.TrimSuffix(host, "."+rootDomain)
-		record, err := app.FindFirstRecordByFilter("sites", "subdomain = {:sub}", dbx.Params{"sub": subdomain})
-		if err != nil {
-			return nil, err
+		record, err = app.FindFirstRecordByFilter("sites", "subdomain = {:sub}", dbx.Params{"sub": subdomain})
+	} else {
+		var domainRecord *core.Record
+		domainRecord, err = app.FindFirstRecordByFilter("custom_domains", "domain = {:domain}", dbx.Params{"domain": host})
+		if err == nil {
+			record, err = app.FindRecordById("sites", domainRecord.GetString("site"))
 		}
-		return record, nil
 	}
-
-	domainRecord, err := app.FindFirstRecordByFilter("custom_domains", "domain = {:domain}", dbx.Params{"domain": host})
-	if err != nil {
-		return nil, err
-	}
-	
-	siteID := domainRecord.GetString("site")
-	siteRecord, err := app.FindRecordById("sites", siteID)
 	if err != nil {
 		return nil, err
 	}
 
-	return siteRecord, nil
+	route := routeFromRecord(record)
+	cacheSiteRoute(host, route, generation)
+	return &route, nil
 }
 
-func getActiveDeployment(app core.App, siteID string) (string, error) {
-	siteRecord, err := app.FindRecordById("sites", siteID)
+func findSiteBySubdomain(app core.App, subdomain string) (*siteRoute, error) {
+	record, err := app.FindFirstRecordByFilter("sites", "subdomain = {:sub}", dbx.Params{"sub": subdomain})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	
-	deploymentID := siteRecord.GetString("active_deployment")
-	if deploymentID == "" {
-		return "", fmt.Errorf("no active deployment")
+	route := routeFromRecord(record)
+	return &route, nil
+}
+
+func routeFromRecord(record *core.Record) siteRoute {
+	return siteRoute{
+		siteID:                record.Id,
+		userID:                record.GetString("user"),
+		deploymentID:          record.GetString("active_deployment"),
+		spaFallback:           record.GetBool("spa_fallback"),
+		isPublic:              record.GetBool("is_public"),
+		disableRequestLogging: record.GetBool("disable_request_logging"),
 	}
-	
-	return deploymentID, nil
+}
+
+func getCachedSiteRoute(host string) (*siteRoute, bool) {
+	siteRoutes.RLock()
+	entry, ok := siteRoutes.entries[host]
+	siteRoutes.RUnlock()
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	route := entry.route
+	return &route, true
+}
+
+func cacheSiteRoute(host string, route siteRoute, generation uint64) {
+	siteRoutes.Lock()
+	defer siteRoutes.Unlock()
+	if generation != siteRoutes.generation {
+		return
+	}
+	if len(siteRoutes.entries) >= 4096 {
+		siteRoutes.entries = make(map[string]siteRouteCacheEntry)
+	}
+	siteRoutes.entries[host] = siteRouteCacheEntry{
+		route:     route,
+		expiresAt: time.Now().Add(siteRouteCacheTTL),
+	}
 }

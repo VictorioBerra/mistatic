@@ -38,7 +38,7 @@ func main() {
 	})
 
 	jsvm.MustRegister(app, jsvm.Config{
-		HooksWatch: true,
+		HooksWatch:    true,
 		MigrationsDir: "pb_migrations",
 	})
 
@@ -48,6 +48,7 @@ func main() {
 	})
 
 	api.RegisterHooks(app)
+	helpers.RegisterSiteRouteCacheHooks(app)
 
 	if err := app.Start(); err != nil {
 		app.Logger().Error("app failed to start", "err", err)
