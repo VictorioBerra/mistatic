@@ -27,19 +27,77 @@ Since its built on Pocketbase, you instantly get API support (for MCP, or skills
 
 ## Docker Deployment
 
-We use a unified multi-stage `Dockerfile`.
-When running in production, map both `/app/sites` and `/pb/pb_data` to volumes. The
-first preserves site deployments, while `/pb/pb_data` preserves PocketBase's SQLite
-database and other application data.
+### Docker CLI
+
+Pull the latest image from Docker Hub:
+
+```bash
+docker pull torydocker12784/mistatic:latest
+```
+
+Run MiStatic with named volumes for both site deployments and PocketBase data:
+
+```bash
+docker run -d \
+	--name mistatic \
+	--restart unless-stopped \
+	-p 8090:8090 \
+	-v mistatic_sites:/app/sites \
+	-v mistatic_pb_data:/pb/pb_data \
+	-e APP_DOMAIN=app.example.com \
+	torydocker12784/mistatic:latest
+```
+
+Replace `app.example.com` with the hostname used to access the MiStatic dashboard.
+
+### Domain Configuration
+
+- `APP_DOMAIN` is the dashboard hostname. Sites are always available beneath it at
+  `https://APP_DOMAIN/site/<subdomain>/`, so this is the only domain variable needed
+  when using path-based routing.
+- `ROOT_DOMAIN` is optional. Set it when wildcard DNS and your reverse proxy route
+  `*.example.com` to MiStatic; each site will then also be available at
+  `<subdomain>.example.com`. If omitted, MiStatic falls back to its local-development
+  default and path-based routing continues to work.
+
+Exact custom domains configured for individual sites do not require `ROOT_DOMAIN`.
+
+### Docker Compose
+
+Create a `compose.yml`:
+
+```yaml
+services:
+	mistatic:
+		image: torydocker12784/mistatic:latest
+		container_name: mistatic
+		restart: unless-stopped
+		ports:
+			- "8090:8090"
+		environment:
+			APP_DOMAIN: app.example.com
+			# Optional: enables <subdomain>.example.com with wildcard DNS/proxy routing.
+			# ROOT_DOMAIN: example.com
+		volumes:
+			- mistatic_sites:/app/sites
+			- mistatic_pb_data:/pb/pb_data
+
+volumes:
+	mistatic_sites:
+	mistatic_pb_data:
+```
+
+Start it with:
+
+```bash
+docker compose up -d
+```
+
+To build the image locally instead, use the repository's unified multi-stage
+`Dockerfile`:
 
 ```bash
 docker build -t mistatic .
-docker run -p 8090:8090 \
-	-v ./sites:/app/sites \
-	-v ./pb_data:/pb/pb_data \
-	-e APP_DOMAIN=app.example.com \
-	-e ROOT_DOMAIN=example.com \
-	mistatic
 ```
 
 **Note on SSL:** MiStatic routes HTTP traffic. Put it behind an auto-SSL reverse proxy like **Caddy** or **Traefik** for custom domain HTTPS.
