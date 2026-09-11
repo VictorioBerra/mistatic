@@ -100,6 +100,20 @@ To build the image locally instead, use the repository's unified multi-stage
 docker build -t mistatic .
 ```
 
+### Publishing Releases
+
+The GitHub Actions workflow requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+repository secrets. A push to `main` publishes the `edge` image for testing. To
+publish a stable release, create and push a semantic version tag:
+
+```bash
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+```
+
+That tag publishes `1.0.0`, `1.0`, `1`, and `latest`. Prerelease tags such as
+`v1.1.0-rc.1` publish their exact prerelease version without replacing `latest`.
+
 **Note on SSL:** MiStatic routes HTTP traffic. Put it behind an auto-SSL reverse proxy like **Caddy** or **Traefik** for custom domain HTTPS.
 
 ## Architecture
