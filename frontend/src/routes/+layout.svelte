@@ -9,6 +9,10 @@
 
     let { children } = $props();
     let isDark = $state(false);
+	let role = $state(pb.authStore.model?.role || '');
+	let authReady = $state(false);
+	let isAuthFlow = $derived($page.url.pathname === '/login' || $page.url.pathname === '/sso');
+	let canViewManagement = $derived(role === 'Admin');
 
     onMount(() => {
         if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
@@ -18,15 +22,27 @@
             document.documentElement.classList.remove('dark');
         }
 
-        pb.authStore.onChange(() => {
-            if (!pb.authStore.isValid && $page.url.pathname !== '/login' && $page.url.pathname !== '/sso') {
-                goto('/login');
-            }
+        const unsubscribe = pb.authStore.onChange((_token, record) => {
+            role = record?.role || '';
         });
 
-        if (!pb.authStore.isValid && $page.url.pathname !== '/login' && $page.url.pathname !== '/sso') {
-            goto('/login');
-        }
+        void (async () => {
+            if (pb.authStore.isValid) {
+                try {
+                    const auth = await pb.collection('users').authRefresh();
+                    role = auth.record.role || '';
+                } catch {
+                    pb.authStore.clear();
+                }
+            }
+
+            authReady = true;
+            if (!isAuthFlow && (!pb.authStore.isValid || role !== 'Admin')) {
+                goto('/login');
+            }
+        })();
+
+        return unsubscribe;
     });
 
     function logout() {
@@ -47,6 +63,7 @@
 </script>
 
 <div class="min-h-screen">
+	{#if canViewManagement}
     <header class="bg-[#24292f] dark:bg-[#161b22] dark:border-b dark:border-[#30363d] text-white p-4 flex items-center justify-between">
         <div class="flex items-center space-x-4">
             <a href="/" class="font-bold text-lg hover:text-gray-300">MiStatic</a>
@@ -65,8 +82,11 @@
             </button>
         </div>
     </header>
+    {/if}
 
     <main class="max-w-5xl mx-auto p-6">
-        {@render children?.()}
+        {#if isAuthFlow || (authReady && canViewManagement)}
+            {@render children?.()}
+        {/if}
     </main>
 </div>

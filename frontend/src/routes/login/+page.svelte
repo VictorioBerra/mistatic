@@ -12,10 +12,16 @@
         loading = true;
         error = '';
         try {
-            await pb.collection('users').authWithPassword(email, password);
+            const auth = await pb.collection('users').authWithPassword(email, password);
             
             // Return to redirect param if exists, otherwise /
-            const redirect = $page.url.searchParams.get('redirect') || '/';
+            const requestedRedirect = $page.url.searchParams.get('redirect');
+            if (auth.record.role === 'Reader' && !requestedRedirect) {
+                pb.authStore.clear();
+                error = 'Reader accounts can only sign in from a private site.';
+                return;
+            }
+            const redirect = requestedRedirect || '/';
             window.location.href = redirect;
         } catch (err) {
             error = 'Invalid email or password';

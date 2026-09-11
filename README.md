@@ -11,10 +11,11 @@ Since its built on Pocketbase, you instantly get API support (for MCP, or skills
 ## Features
 
 - Custom domain support
-- Subpath support so you dont need to bother with wildcard certs and stuff
+- Subpath support if custom domains is too complex
 - No containers needed for your projects, pure static files
 - No need to edit any nginx config files
 - Perfomant request logging with forwarded headers support
+- Aggressive caching for site routing
 - Mutable deployments (edit files in a live deployment)
 - Private sites with SSO
 - Deployments and rollbacks
@@ -99,6 +100,11 @@ To build the image locally instead, use the repository's unified multi-stage
 ```bash
 docker build -t mistatic .
 ```
+
+### FAQ
+
+- Can I add a private site read-only user?
+	- Yes, in the Pocketbase admin UI at `app.example.com/_` create a user and selected "Reader" on the "Role" field.
 
 ### Publishing Releases
 

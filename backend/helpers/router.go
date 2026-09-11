@@ -20,7 +20,6 @@ const siteRouteCacheTTL = 5 * time.Minute
 
 type siteRoute struct {
 	siteID                string
-	userID                string
 	deploymentID          string
 	spaFallback           bool
 	isPublic              bool
@@ -84,21 +83,12 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			return e.String(http.StatusBadRequest, "Missing token")
 		}
 
-		var userID string
 		var err error
 		siteParam := e.Request.URL.Query().Get("site")
 		if siteParam != "" {
-			var siteRecord *core.Record
-			siteRecord, err = e.App.FindRecordById("sites", siteParam)
-			if err == nil {
-				userID = siteRecord.GetString("user")
-			}
+			_, err = e.App.FindRecordById("sites", siteParam)
 		} else {
-			var route siteRoute
-			route, err = resolveHostToSite(e.App, host, rootDomain)
-			if err == nil {
-				userID = route.userID
-			}
+			_, err = resolveHostToSite(e.App, host, rootDomain)
 		}
 
 		if err != nil {
@@ -106,8 +96,8 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 		}
 
 		authRecord, err := e.App.FindAuthRecordByToken(token, core.TokenTypeAuth)
-		if err != nil || authRecord.Id != userID {
-			return e.String(http.StatusForbidden, "Invalid token or you do not own this site")
+		if err != nil || !HasAnyRole(authRecord, "Admin", "Reader") {
+			return e.String(http.StatusForbidden, "Admin or Reader role required")
 		}
 
 		cookie := new(http.Cookie)
@@ -231,7 +221,7 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 				needsAuth = true
 			} else {
 				authRecord, authErr := e.App.FindAuthRecordByToken(cookie.Value, core.TokenTypeAuth)
-				if authErr != nil || authRecord.Id != route.userID {
+				if authErr != nil || !HasAnyRole(authRecord, "Admin", "Reader") {
 					needsAuth = true
 				}
 			}
@@ -324,7 +314,6 @@ func resolveHostToSite(app core.App, host string, rootDomain string) (siteRoute,
 func routeFromRecord(record *core.Record) siteRoute {
 	return siteRoute{
 		siteID:                record.Id,
-		userID:                record.GetString("user"),
 		deploymentID:          record.GetString("active_deployment"),
 		spaFallback:           record.GetBool("spa_fallback"),
 		isPublic:              record.GetBool("is_public"),

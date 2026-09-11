@@ -8,25 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mistatic/helpers"
+
 	"github.com/pocketbase/pocketbase/core"
 )
 
 func RegisterDeployRoute(se *core.ServeEvent) {
 	se.Router.POST("/api/mistatic/deploy/{site_id}", func(e *core.RequestEvent) error {
 		// Basic auth check
-		if e.Auth == nil {
-			return e.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-		}
-
 		siteID := e.Request.PathValue("site_id")
-		siteRecord, err := e.App.FindRecordById("sites", siteID)
+		siteRecord, err := findOwnedSite(e, siteID)
 		if err != nil {
-			return e.JSON(http.StatusNotFound, map[string]string{"error": "Site not found"})
-		}
-
-		// Ensure ownership
-		if siteRecord.GetString("user") != e.Auth.Id {
-			return e.JSON(http.StatusForbidden, map[string]string{"error": "Forbidden"})
+			return err
 		}
 
 		// Parse multipart form
@@ -51,7 +44,7 @@ func RegisterDeployRoute(se *core.ServeEvent) {
 
 		// Save the file
 		isZip := strings.HasSuffix(strings.ToLower(header.Filename), ".zip")
-		
+
 		var destFile string
 		if isZip {
 			destFile = filepath.Join(siteDir, "upload.zip")
@@ -89,7 +82,7 @@ func RegisterDeployRoute(se *core.ServeEvent) {
 		e.App.Save(siteRecord)
 
 		return e.JSON(http.StatusOK, map[string]string{"message": "Deployed successfully", "deployment_id": deployment.Id})
-	})
+	}).Bind(helpers.RequireRole("Admin"))
 }
 
 func unzip(src string, dest string) error {

@@ -8,21 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mistatic/helpers"
+
 	"github.com/pocketbase/pocketbase/core"
 )
 
 func RegisterFileRoutes(se *core.ServeEvent) {
 	// Download zip
 	se.Router.GET("/api/mistatic/deploy/{site_id}/{deployment_id}/download", func(e *core.RequestEvent) error {
-		if e.Auth == nil {
-			return e.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-		}
 		siteID := e.Request.PathValue("site_id")
 		deploymentID := e.Request.PathValue("deployment_id")
-		
-		siteRecord, err := e.App.FindRecordById("sites", siteID)
-		if err != nil || siteRecord.GetString("user") != e.Auth.Id {
-			return e.JSON(http.StatusForbidden, map[string]string{"error": "Forbidden"})
+
+		if _, err := findOwnedSite(e, siteID); err != nil {
+			return err
 		}
 
 		cwd, _ := os.Getwd()
@@ -45,7 +43,7 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 			if path == siteDir {
 				return nil
 			}
-			
+
 			relPath, err := filepath.Rel(siteDir, path)
 			if err != nil {
 				return err
@@ -81,19 +79,15 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 		})
 
 		return nil
-	})
+	}).Bind(helpers.RequireRole("Admin"))
 
 	// List files
 	se.Router.GET("/api/mistatic/deploy/{site_id}/{deployment_id}/files", func(e *core.RequestEvent) error {
-		if e.Auth == nil {
-			return e.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-		}
 		siteID := e.Request.PathValue("site_id")
 		deploymentID := e.Request.PathValue("deployment_id")
-		
-		siteRecord, err := e.App.FindRecordById("sites", siteID)
-		if err != nil || siteRecord.GetString("user") != e.Auth.Id {
-			return e.JSON(http.StatusForbidden, map[string]string{"error": "Forbidden"})
+
+		if _, err := findOwnedSite(e, siteID); err != nil {
+			return err
 		}
 
 		cwd, _ := os.Getwd()
@@ -107,7 +101,7 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 		}
 
 		var files []FileNode
-		err = filepath.Walk(siteDir, func(path string, info os.FileInfo, err error) error {
+		err := filepath.Walk(siteDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || path == siteDir {
 				return nil
 			}
@@ -120,15 +114,15 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 			})
 			return nil
 		})
+		if err != nil {
+			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to list files"})
+		}
 
 		return e.JSON(http.StatusOK, files)
-	})
+	}).Bind(helpers.RequireRole("Admin"))
 
 	// Upload/Replace file
 	se.Router.POST("/api/mistatic/deploy/{site_id}/{deployment_id}/files/upload", func(e *core.RequestEvent) error {
-		if e.Auth == nil {
-			return e.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-		}
 		siteID := e.Request.PathValue("site_id")
 		deploymentID := e.Request.PathValue("deployment_id")
 		targetPath := e.Request.FormValue("path")
@@ -136,10 +130,9 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 		if targetPath == "" {
 			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Path is required"})
 		}
-		
-		siteRecord, err := e.App.FindRecordById("sites", siteID)
-		if err != nil || siteRecord.GetString("user") != e.Auth.Id {
-			return e.JSON(http.StatusForbidden, map[string]string{"error": "Forbidden"})
+
+		if _, err := findOwnedSite(e, siteID); err != nil {
+			return err
 		}
 
 		cwd, _ := os.Getwd()
@@ -165,13 +158,10 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 
 		io.Copy(out, file)
 		return e.JSON(http.StatusOK, map[string]string{"message": "File uploaded"})
-	})
+	}).Bind(helpers.RequireRole("Admin"))
 
 	// Delete file
 	se.Router.DELETE("/api/mistatic/deploy/{site_id}/{deployment_id}/files/delete", func(e *core.RequestEvent) error {
-		if e.Auth == nil {
-			return e.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-		}
 		siteID := e.Request.PathValue("site_id")
 		deploymentID := e.Request.PathValue("deployment_id")
 		targetPath := e.Request.URL.Query().Get("path")
@@ -179,10 +169,9 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 		if targetPath == "" {
 			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Path is required"})
 		}
-		
-		siteRecord, err := e.App.FindRecordById("sites", siteID)
-		if err != nil || siteRecord.GetString("user") != e.Auth.Id {
-			return e.JSON(http.StatusForbidden, map[string]string{"error": "Forbidden"})
+
+		if _, err := findOwnedSite(e, siteID); err != nil {
+			return err
 		}
 
 		cwd, _ := os.Getwd()
@@ -193,11 +182,11 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid path"})
 		}
 
-		err = os.RemoveAll(destFile)
+		err := os.RemoveAll(destFile)
 		if err != nil {
 			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
 		}
 
 		return e.JSON(http.StatusOK, map[string]string{"message": "File deleted"})
-	})
+	}).Bind(helpers.RequireRole("Admin"))
 }
