@@ -26,7 +26,7 @@ func main() {
 	app := pocketbase.New()
 
 	// Initialize log workers
-	helpers.InitLogger(5, 10000)
+	helpers.InitLogger(1, 10000)
 
 	// hooks.RegisterX(app)
 

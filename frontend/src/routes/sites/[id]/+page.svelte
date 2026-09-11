@@ -356,6 +356,21 @@
         <div class="space-y-6">
             <div class="card p-4">
                 <h3 class="font-semibold mb-3">Settings</h3>
+                <label class="flex items-center space-x-2 text-sm cursor-pointer mb-3">
+                    <input type="checkbox" class="rounded border-gray-300 dark:border-[#30363d]"
+                        checked={site.is_public}
+                        onchange={async (e) => {
+                            const target = /** @type {HTMLInputElement} */ (e.target);
+                            try {
+                                site = await pb.collection('sites').update(site.id, { is_public: target.checked });
+                            } catch (err) {
+                                alert('Failed to update site visibility');
+                                target.checked = !target.checked;
+                            }
+                        }}
+                    />
+                    <span>{site.is_public ? 'Public site' : 'Private site'}</span>
+                </label>
                 <label class="flex items-center space-x-2 text-sm cursor-pointer">
                     <input type="checkbox" class="rounded border-gray-300 dark:border-[#30363d]" 
                         checked={site.disable_request_logging} 

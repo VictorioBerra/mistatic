@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -61,30 +62,28 @@ func clearSiteRouteCache() {
 }
 
 func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
-	appDomain := os.Getenv("APP_DOMAIN")
+	appDomain := normalizeHost(os.Getenv("APP_DOMAIN"))
 	if appDomain == "" {
 		appDomain = "app.mistatic.local"
 	}
-	rootDomain := os.Getenv("ROOT_DOMAIN")
+	rootDomain := normalizeHost(os.Getenv("ROOT_DOMAIN"))
 	if rootDomain == "" {
 		rootDomain = "mistatic.local"
 	}
+	cwd, _ := os.Getwd()
+	sitesRoot := filepath.Clean(filepath.Join(cwd, "..", "sites"))
 
 	dashboardHandler := apis.Static(distDirFS, true)
 
 	// SSO Callback POST handler
 	se.Router.POST("/xapi/sso-callback", func(e *core.RequestEvent) error {
-		host := e.Request.Host
-		if strings.Contains(host, ":") {
-			host = strings.Split(host, ":")[0]
-		}
+		host := normalizeHost(e.Request.Host)
 
 		token := e.Request.FormValue("token")
 		if token == "" {
 			return e.String(http.StatusBadRequest, "Missing token")
 		}
 
-		var siteID string
 		var userID string
 		var err error
 		siteParam := e.Request.URL.Query().Get("site")
@@ -92,14 +91,12 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			var siteRecord *core.Record
 			siteRecord, err = e.App.FindRecordById("sites", siteParam)
 			if err == nil {
-				siteID = siteRecord.Id
 				userID = siteRecord.GetString("user")
 			}
 		} else {
-			var route *siteRoute
+			var route siteRoute
 			route, err = resolveHostToSite(e.App, host, rootDomain)
 			if err == nil {
-				siteID = route.siteID
 				userID = route.userID
 			}
 		}
@@ -137,12 +134,10 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 	se.Router.GET("/{path...}", func(e *core.RequestEvent) error {
 		start := time.Now()
 
-		host := e.Request.Host
-		if strings.Contains(host, ":") {
-			host = strings.Split(host, ":")[0]
-		}
+		host := normalizeHost(e.Request.Host)
 
-		var route *siteRoute
+		var route siteRoute
+		var routeFound bool
 		var isSubpathSite bool
 		var subpathPrefix string
 
@@ -153,9 +148,10 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 				parts := strings.SplitN(reqPath, "/", 4)
 				if len(parts) >= 3 {
 					subdomain := parts[2]
-					site, err := findSiteBySubdomain(e.App, subdomain)
+					site, err := resolveHostToSite(e.App, subdomain+"."+rootDomain, rootDomain)
 					if err == nil {
 						route = site
+						routeFound = true
 						isSubpathSite = true
 						subpathPrefix = "/site/" + subdomain
 
@@ -166,59 +162,58 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 				}
 			}
 
-			if route == nil {
+			if !routeFound {
 				return dashboardHandler(e)
 			}
 		}
 
-		if route == nil {
+		if !routeFound {
 			var err error
 			route, err = resolveHostToSite(e.App, host, rootDomain)
 			if err != nil {
 				return e.String(http.StatusNotFound, "Site not found or inactive")
 			}
+			routeFound = true
 		}
 
 		// Fire and forget logging
 		defer func() {
-			if route != nil {
-				// Check if logging is disabled for this site
-				if !route.disableRequestLogging {
-					duration := time.Since(start).Milliseconds()
+			// Check if logging is disabled for this site
+			if !route.disableRequestLogging {
+				duration := time.Since(start).Milliseconds()
 
-					// Determine real IP
-					ip := e.Request.Header.Get("CF-Connecting-IP")
-					if ip == "" {
-						ip = e.Request.Header.Get("X-Forwarded-For")
-						if ip != "" {
-							// X-Forwarded-For can contain multiple IPs, the first one is the client
-							ip = strings.Split(ip, ",")[0]
-							ip = strings.TrimSpace(ip)
-						}
+				// Determine real IP
+				ip := e.Request.Header.Get("CF-Connecting-IP")
+				if ip == "" {
+					ip = e.Request.Header.Get("X-Forwarded-For")
+					if ip != "" {
+						// X-Forwarded-For can contain multiple IPs, the first one is the client
+						ip = strings.Split(ip, ",")[0]
+						ip = strings.TrimSpace(ip)
 					}
-					if ip == "" {
-						ip = e.Request.Header.Get("X-Real-IP")
-					}
-					if ip == "" {
-						ip = e.Request.RemoteAddr
-					}
+				}
+				if ip == "" {
+					ip = e.Request.Header.Get("X-Real-IP")
+				}
+				if ip == "" {
+					ip = e.Request.RemoteAddr
+				}
 
-					payload := LogPayload{
-						App:        e.App,
-						SiteID:     route.siteID,
-						Method:     e.Request.Method,
-						Path:       reqPath,
-						IP:         ip,
-						UserAgent:  e.Request.UserAgent(),
-						DurationMs: duration,
-					}
+				payload := LogPayload{
+					App:        e.App,
+					SiteID:     route.siteID,
+					Method:     e.Request.Method,
+					Path:       reqPath,
+					IP:         ip,
+					UserAgent:  e.Request.UserAgent(),
+					DurationMs: duration,
+				}
 
-					select {
-					case LogQueue <- payload:
-						// Successfully queued
-					default:
-						// Queue is full, drop the log to prevent blocking
-					}
+				select {
+				case LogQueue <- payload:
+					// Successfully queued
+				default:
+					// Queue is full, drop the log to prevent blocking
 				}
 			}
 		}()
@@ -267,8 +262,7 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			return e.HTML(http.StatusOK, defaultSiteHTML(host))
 		}
 
-		cwd, _ := os.Getwd()
-		siteDir := filepath.Join(cwd, "..", "sites", siteID, deploymentID)
+		siteDir := filepath.Join(sitesRoot, siteID, deploymentID)
 
 		if isSubpathSite {
 			reqPath = strings.TrimPrefix(reqPath, subpathPrefix)
@@ -277,13 +271,16 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			}
 		}
 
-		if reqPath == "/" {
-			reqPath = "/index.html"
+		relativePath := strings.TrimPrefix(path.Clean("/"+reqPath), "/")
+		if relativePath == "" || relativePath == "." {
+			relativePath = "index.html"
 		}
 
-		fullPath := filepath.Join(siteDir, reqPath)
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) && spaFallback {
-			fullPath = filepath.Join(siteDir, "index.html")
+		fullPath := filepath.Join(siteDir, filepath.FromSlash(relativePath))
+		if spaFallback {
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				fullPath = filepath.Join(siteDir, "index.html")
+			}
 		}
 
 		http.ServeFile(e.Response, e.Request, fullPath)
@@ -291,9 +288,9 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 	})
 }
 
-func resolveHostToSite(app core.App, host string, rootDomain string) (*siteRoute, error) {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	rootDomain = strings.ToLower(strings.TrimSuffix(rootDomain, "."))
+func resolveHostToSite(app core.App, host string, rootDomain string) (siteRoute, error) {
+	host = normalizeHost(host)
+	rootDomain = normalizeHost(rootDomain)
 
 	if route, ok := getCachedSiteRoute(host); ok {
 		return route, nil
@@ -316,21 +313,12 @@ func resolveHostToSite(app core.App, host string, rootDomain string) (*siteRoute
 		}
 	}
 	if err != nil {
-		return nil, err
+		return siteRoute{}, err
 	}
 
 	route := routeFromRecord(record)
 	cacheSiteRoute(host, route, generation)
-	return &route, nil
-}
-
-func findSiteBySubdomain(app core.App, subdomain string) (*siteRoute, error) {
-	record, err := app.FindFirstRecordByFilter("sites", "subdomain = {:sub}", dbx.Params{"sub": subdomain})
-	if err != nil {
-		return nil, err
-	}
-	route := routeFromRecord(record)
-	return &route, nil
+	return route, nil
 }
 
 func routeFromRecord(record *core.Record) siteRoute {
@@ -344,15 +332,14 @@ func routeFromRecord(record *core.Record) siteRoute {
 	}
 }
 
-func getCachedSiteRoute(host string) (*siteRoute, bool) {
+func getCachedSiteRoute(host string) (siteRoute, bool) {
 	siteRoutes.RLock()
 	entry, ok := siteRoutes.entries[host]
 	siteRoutes.RUnlock()
 	if !ok || time.Now().After(entry.expiresAt) {
-		return nil, false
+		return siteRoute{}, false
 	}
-	route := entry.route
-	return &route, true
+	return entry.route, true
 }
 
 func cacheSiteRoute(host string, route siteRoute, generation uint64) {
@@ -368,4 +355,16 @@ func cacheSiteRoute(host string, route siteRoute, generation uint64) {
 		route:     route,
 		expiresAt: time.Now().Add(siteRouteCacheTTL),
 	}
+}
+
+func normalizeHost(hostPort string) string {
+	host := hostPort
+	if strings.HasPrefix(hostPort, "[") {
+		if bracket := strings.IndexByte(hostPort, ']'); bracket > 0 {
+			host = hostPort[1:bracket]
+		}
+	} else if colon := strings.IndexByte(hostPort, ':'); colon >= 0 && colon == strings.LastIndexByte(hostPort, ':') {
+		host = hostPort[:colon]
+	}
+	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
