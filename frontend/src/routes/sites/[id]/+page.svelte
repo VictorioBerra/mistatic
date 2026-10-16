@@ -25,10 +25,12 @@
     let isDragging = $state(false);
     let isUploading = $state(false);
     
-    /** @type {File | null} */
-    let pendingFile = $state(null);
+    /** @type {{ file: File, path: string }[]} */
+    let pendingFiles = $state([]);
     /** @type {string[]} */
-    let zipContents = $state([]);
+    let previewItems = $state([]);
+    /** @type {string} */
+    let previewTitle = $state("");
     
     /** @type {HTMLInputElement | null} */
     let fileInput = $state(null);
@@ -56,13 +58,61 @@
         loadData().catch(console.error);
     });
 
-    /** @param {File} file */
-    async function stageFile(file) {
-        pendingFile = file;
-        zipContents = [];
-        
-        if (file.name.endsWith('.zip')) {
-            zipContents = ["Loading contents..."];
+    /**
+     * @param {any} item
+     * @param {string} [currentPath='']
+     * @returns {Promise<{ file: File, path: string }[]>}
+     */
+    async function traverseEntry(item, currentPath = '') {
+        if (!item) return [];
+        if (item.isFile) {
+            return new Promise((resolve) => {
+                item.file((/** @type {File} */ file) => {
+                    const filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+                    resolve([{ file, path: filePath }]);
+                }, () => resolve([]));
+            });
+        } else if (item.isDirectory) {
+            const dirReader = item.createReader();
+            const dirPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+            const entries = await new Promise((resolve) => {
+                /** @type {any[]} */
+                const results = [];
+                function readBatch() {
+                    dirReader.readEntries((/** @type {any[]} */ batch) => {
+                        if (!batch || batch.length === 0) {
+                            resolve(results);
+                        } else {
+                            results.push(...batch);
+                            readBatch();
+                        }
+                    }, () => resolve(results));
+                }
+                readBatch();
+            });
+            const nested = await Promise.all(
+                entries.map(entry => traverseEntry(entry, dirPath))
+            );
+            return nested.flat();
+        }
+        return [];
+    }
+
+    /**
+     * @param {{ file: File, path: string }[]} stagedList
+     */
+    async function stageFiles(stagedList) {
+        pendingFiles = stagedList;
+        previewItems = [];
+        previewTitle = "";
+
+        if (stagedList.length === 0) return;
+
+        // Check if single zip
+        if (stagedList.length === 1 && stagedList[0].file.name.toLowerCase().endsWith('.zip')) {
+            const file = stagedList[0].file;
+            previewTitle = `Zip Archive: ${file.name}`;
+            previewItems = ["Loading contents..."];
             try {
                 const zip = new JSZip();
                 const contents = await zip.loadAsync(file);
@@ -74,64 +124,116 @@
                     }
                 });
                 const itemsArr = Array.from(rootItems);
-                zipContents = itemsArr.slice(0, 10);
+                previewItems = itemsArr.slice(0, 10);
                 if (itemsArr.length > 10) {
-                    zipContents.push(`... and ${itemsArr.length - 10} more`);
+                    previewItems.push(`... and ${itemsArr.length - 10} more`);
                 }
             } catch (e) {
                 console.error(e);
-                zipContents = ["(Could not read zip contents)"];
+                previewItems = ["(Could not read zip contents)"];
             }
+        } else if (stagedList.length === 1) {
+            const single = stagedList[0];
+            previewTitle = "Single File Deployment";
+            previewItems = [`${single.path} (${(single.file.size / 1024).toFixed(1)} KB)`];
         } else {
-            zipContents = [file.name];
+            const totalBytes = stagedList.reduce((acc, curr) => acc + curr.file.size, 0);
+            previewTitle = `${stagedList.length} files staged (${(totalBytes / 1024).toFixed(1)} KB)`;
+            previewItems = stagedList.slice(0, 10).map(i => i.path);
+            if (stagedList.length > 10) {
+                previewItems.push(`... and ${stagedList.length - 10} more files`);
+            }
         }
     }
 
-    /** @param {File} file */
-    async function uploadFile(file) {
+    async function uploadDeployment() {
+        if (pendingFiles.length === 0) return;
         isUploading = true;
         const formData = new FormData();
-        formData.append('file', file);
+
+        for (const item of pendingFiles) {
+            formData.append('files', item.file);
+            formData.append('paths', item.path);
+        }
 
         try {
-            const res = await fetch(`/api/mistatic/deploy/${siteId}`, {
+            await pb.send(`/api/mistatic/deploy/${siteId}`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': pb.authStore.token
-                },
                 body: formData
             });
-            
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || 'Upload failed');
-            }
-            
+
+            pendingFiles = [];
+            previewItems = [];
+            previewTitle = "";
+            if (fileInput) fileInput.value = '';
+
             await loadData();
         } catch (err) {
             console.error(err);
-            const e = /** @type {Error} */ (err);
-            alert(e.message);
+            const e = /** @type {any} */ (err);
+            alert(e?.data?.error || e?.message || 'Deployment failed');
         } finally {
             isUploading = false;
         }
     }
 
     /** @param {DragEvent} e */
-    function handleDrop(e) {
+    async function handleDrop(e) {
         e.preventDefault();
         isDragging = false;
-        
-        if (!e.dataTransfer || !e.dataTransfer.files.length) return;
-        stageFile(e.dataTransfer.files[0]);
+
+        if (!e.dataTransfer) return;
+
+        /** @type {{ file: File, path: string }[]} */
+        let collected = [];
+
+        if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+            const entryPromises = [];
+            for (let i = 0; i < e.dataTransfer.items.length; i++) {
+                const item = e.dataTransfer.items[i];
+                if (typeof item.webkitGetAsEntry === 'function') {
+                    const entry = item.webkitGetAsEntry();
+                    if (entry) {
+                        entryPromises.push(traverseEntry(entry));
+                        continue;
+                    }
+                }
+                const file = item.getAsFile();
+                if (file) {
+                    collected.push({ file, path: file.name });
+                }
+            }
+            if (entryPromises.length > 0) {
+                const nestedResults = await Promise.all(entryPromises);
+                collected = collected.concat(nestedResults.flat());
+            }
+        } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+                const f = e.dataTransfer.files[i];
+                collected.push({ file: f, path: f.name });
+            }
+        }
+
+        if (collected.length > 0) {
+            await stageFiles(collected);
+        }
     }
 
     /** @param {Event} e */
-    function handleFileSelect(e) {
+    async function handleFileSelect(e) {
         const target = /** @type {HTMLInputElement} */ (e.target);
         if (!target.files || !target.files.length) return;
-        stageFile(target.files[0]);
-        target.value = ''; // Reset input
+
+        /** @type {{ file: File, path: string }[]} */
+        const collected = [];
+        for (let i = 0; i < target.files.length; i++) {
+            const file = target.files[i];
+            const relPath = file.webkitRelativePath || file.name;
+            collected.push({ file, path: relPath });
+        }
+
+        await stageFiles(collected);
+        target.value = '';
     }
 </script>
 
@@ -168,33 +270,34 @@
         <div class="md:col-span-2 space-y-6">
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="card p-8 border-dashed border-2 text-center transition-colors cursor-pointer {isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 dark:border-[#30363d] hover:bg-gray-50 dark:hover:bg-gray-800/50 dark:bg-[#0d1117]'}"
+            <div role="group" aria-label="Deployment upload dropzone" class="card p-8 border-dashed border-2 text-center transition-colors cursor-pointer {isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/20' : 'border-gray-300 dark:border-[#30363d] hover:bg-gray-50 dark:hover:bg-gray-800/50 dark:bg-[#0d1117]'}"
                 ondragover={(e) => { e.preventDefault(); isDragging = true; }}
                 ondragleave={(e) => { e.preventDefault(); isDragging = false; }}
                 ondrop={handleDrop}
                 onclick={() => fileInput?.click()}>
                 
-                <input type="file" class="hidden" bind:this={fileInput} onchange={handleFileSelect} />
+                <input type="file" multiple class="hidden" bind:this={fileInput} onchange={handleFileSelect} />
                 
                 {#if isUploading}
                     <div class="py-8">
                         <p class="font-medium text-blue-600 dark:text-blue-400 mb-2">Deploying your site...</p>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">Processing files and updating pointers.</p>
+                        <p class="text-sm text-gray-500 dark:text-gray-400">Compressing files, generating artifact, and updating pointers.</p>
                     </div>
-                {:else if pendingFile}
+                {:else if pendingFiles.length > 0}
                     <div class="py-6">
                         <svg class="mx-auto h-12 w-12 text-blue-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <p class="font-medium text-gray-900 dark:text-gray-100 mb-2">Ready to deploy</p>
-                        <div class="text-sm text-gray-500 dark:text-gray-400 font-mono mb-4">
-                            {#each zipContents as item}
-                                <div>{item}</div>
+                        <p class="text-xs text-blue-600 dark:text-blue-400 font-semibold mb-3">{previewTitle}</p>
+                        <div class="text-sm text-gray-500 dark:text-gray-400 font-mono mb-4 max-h-48 overflow-y-auto border border-gray-200 dark:border-[#30363d] p-3 rounded bg-gray-50 dark:bg-[#161b22] text-left">
+                            {#each previewItems as item}
+                                <div class="truncate">{item}</div>
                             {/each}
                         </div>
                         <div class="space-x-3">
-                            <button class="btn-default" onclick={(e) => { e.stopPropagation(); pendingFile = null; zipContents = []; fileInput.value = ''; }}>Cancel</button>
-                            <button class="btn-primary" onclick={(e) => { e.stopPropagation(); uploadFile(pendingFile); }}>Deploy</button>
+                            <button class="btn-default" onclick={(e) => { e.stopPropagation(); pendingFiles = []; previewItems = []; previewTitle = ''; if (fileInput) fileInput.value = ''; }}>Cancel</button>
+                            <button class="btn-primary" onclick={(e) => { e.stopPropagation(); uploadDeployment(); }}>Deploy</button>
                         </div>
                     </div>
                 {:else}
@@ -202,8 +305,8 @@
                         <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
-                        <p class="font-medium mb-1">Drag and drop your file or .zip here</p>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">Upload a single file or a zip of your static site</p>
+                        <p class="font-medium mb-1">Drag and drop file(s), folders, or a .zip here</p>
+                        <p class="text-sm text-gray-500 dark:text-gray-400">Deploy a single file, full directory, or zipped static site</p>
                     </div>
                 {/if}
             </div>

@@ -16,9 +16,10 @@ Since its built on Pocketbase, you instantly get API support (for MCP, or skills
 - No need to edit any nginx config files
 - Perfomant request logging with forwarded headers support
 - Aggressive caching for site routing
-- Mutable deployments (edit files in a live deployment)
+- Immutable deployments & rollbacks
+- Multi-file, folder, and zip deployments with automatic artifact packaging
+- S3-backed deployment artifact archives (keeps SQL database lightweight)
 - Private sites with SSO
-- Deployments and rollbacks
 
 ## Screenshots
 

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"mistatic/helpers"
 
@@ -23,6 +22,28 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 			return err
 		}
 
+		// Try streaming from PB storage if deployment_artifact exists
+		deployment, err := e.App.FindRecordById("deployments", deploymentID)
+		if err == nil && deployment.GetString("site") == siteID {
+			artifact := deployment.GetString("deployment_artifact")
+			if artifact != "" {
+				fsys, err := e.App.NewFilesystem()
+				if err == nil {
+					defer fsys.Close()
+					fileKey := deployment.BaseFilesPath() + "/" + artifact
+					r, err := fsys.GetReader(fileKey)
+					if err == nil {
+						defer r.Close()
+						e.Response.Header().Set("Content-Type", "application/zip")
+						e.Response.Header().Set("Content-Disposition", "attachment; filename="+deploymentID+".zip")
+						_, copyErr := io.Copy(e.Response, r)
+						return copyErr
+					}
+				}
+			}
+		}
+
+		// Fallback: build zip on the fly from local disk (for legacy deployments)
 		cwd, _ := os.Getwd()
 		siteDir := filepath.Join(cwd, "..", "sites", siteID, deploymentID)
 
@@ -36,7 +57,7 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 		zipWriter := zip.NewWriter(e.Response)
 		defer zipWriter.Close()
 
-		filepath.Walk(siteDir, func(path string, info os.FileInfo, err error) error {
+		return filepath.Walk(siteDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -77,11 +98,9 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 			_, err = io.Copy(writer, file)
 			return err
 		})
-
-		return nil
 	}).Bind(helpers.RequireRole("Admin"))
 
-	// List files
+	// List files (Read-only manifest inspection)
 	se.Router.GET("/api/mistatic/deploy/{site_id}/{deployment_id}/files", func(e *core.RequestEvent) error {
 		siteID := e.Request.PathValue("site_id")
 		deploymentID := e.Request.PathValue("deployment_id")
@@ -119,74 +138,5 @@ func RegisterFileRoutes(se *core.ServeEvent) {
 		}
 
 		return e.JSON(http.StatusOK, files)
-	}).Bind(helpers.RequireRole("Admin"))
-
-	// Upload/Replace file
-	se.Router.POST("/api/mistatic/deploy/{site_id}/{deployment_id}/files/upload", func(e *core.RequestEvent) error {
-		siteID := e.Request.PathValue("site_id")
-		deploymentID := e.Request.PathValue("deployment_id")
-		targetPath := e.Request.FormValue("path")
-
-		if targetPath == "" {
-			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Path is required"})
-		}
-
-		if _, err := findOwnedSite(e, siteID); err != nil {
-			return err
-		}
-
-		cwd, _ := os.Getwd()
-		destFile := filepath.Join(cwd, "..", "sites", siteID, deploymentID, targetPath)
-
-		baseDir := filepath.Join(cwd, "..", "sites", siteID, deploymentID)
-		if !strings.HasPrefix(filepath.Clean(destFile), filepath.Clean(baseDir)) {
-			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid path"})
-		}
-
-		file, _, err := e.Request.FormFile("file")
-		if err != nil {
-			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Missing file"})
-		}
-		defer file.Close()
-
-		os.MkdirAll(filepath.Dir(destFile), os.ModePerm)
-		out, err := os.Create(destFile)
-		if err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create file"})
-		}
-		defer out.Close()
-
-		io.Copy(out, file)
-		return e.JSON(http.StatusOK, map[string]string{"message": "File uploaded"})
-	}).Bind(helpers.RequireRole("Admin"))
-
-	// Delete file
-	se.Router.DELETE("/api/mistatic/deploy/{site_id}/{deployment_id}/files/delete", func(e *core.RequestEvent) error {
-		siteID := e.Request.PathValue("site_id")
-		deploymentID := e.Request.PathValue("deployment_id")
-		targetPath := e.Request.URL.Query().Get("path")
-
-		if targetPath == "" {
-			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Path is required"})
-		}
-
-		if _, err := findOwnedSite(e, siteID); err != nil {
-			return err
-		}
-
-		cwd, _ := os.Getwd()
-		destFile := filepath.Join(cwd, "..", "sites", siteID, deploymentID, targetPath)
-
-		baseDir := filepath.Join(cwd, "..", "sites", siteID, deploymentID)
-		if !strings.HasPrefix(filepath.Clean(destFile), filepath.Clean(baseDir)) {
-			return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid path"})
-		}
-
-		err := os.RemoveAll(destFile)
-		if err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
-		}
-
-		return e.JSON(http.StatusOK, map[string]string{"message": "File deleted"})
 	}).Bind(helpers.RequireRole("Admin"))
 }

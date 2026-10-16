@@ -40,17 +40,10 @@
     async function loadFiles() {
         loading = true;
         try {
-            const res = await fetch(`/api/mistatic/deploy/${siteId}/${deploymentId}/files`, {
-                headers: { 'Authorization': pb.authStore.token }
-            });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || 'Failed to load files');
-            }
-            files = await res.json();
+            files = await pb.send(`/api/mistatic/deploy/${siteId}/${deploymentId}/files`);
         } catch (err) {
-            const e = /** @type {Error} */ (err);
-            error = e.message;
+            const e = /** @type {any} */ (err);
+            error = e?.data?.error || e?.message || 'Failed to load files';
         } finally {
             loading = false;
         }
@@ -59,79 +52,20 @@
     onMount(() => {
         loadFiles();
     });
-
-    /**
-     * @param {string} path
-     */
-    async function deleteFile(path) {
-        if (!confirm(`Delete ${path}?`)) return;
-        try {
-            const res = await fetch(`/api/mistatic/deploy/${siteId}/${deploymentId}/files/delete?path=${encodeURIComponent(path)}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': pb.authStore.token }
-            });
-            if (!res.ok) throw new Error('Delete failed');
-            await loadFiles();
-        } catch (err) {
-            alert('Failed to delete file');
-        }
-    }
-
-    /** @type {HTMLInputElement | null} */
-    let fileInput = $state(null);
-    let isUploading = $state(false);
-    let isDragging = $state(false);
-
-    /**
-     * @param {File} file
-     */
-    async function uploadFile(file) {
-        isUploading = true;
-        const targetPath = currentPath ? `${currentPath}/${file.name}` : file.name;
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('path', targetPath);
-
-        try {
-            const res = await fetch(`/api/mistatic/deploy/${siteId}/${deploymentId}/files/upload`, {
-                method: 'POST',
-                headers: { 'Authorization': pb.authStore.token },
-                body: formData
-            });
-            
-            if (!res.ok) throw new Error('Upload failed');
-            await loadFiles();
-        } catch (err) {
-            alert('Failed to upload file');
-        } finally {
-            isUploading = false;
-            if (fileInput) fileInput.value = "";
-        }
-    }
-
-    /** @param {DragEvent} e */
-    function handleDrop(e) {
-        e.preventDefault();
-        isDragging = false;
-        if (!e.dataTransfer || !e.dataTransfer.files.length) return;
-        uploadFile(e.dataTransfer.files[0]);
-    }
-
-    /** @param {Event} e */
-    function handleFileSelect(e) {
-        const target = /** @type {HTMLInputElement} */ (e.target);
-        if (!target.files || !target.files.length) return;
-        uploadFile(target.files[0]);
-    }
 </script>
 
 <div class="mb-4">
     <a href={`/sites/${siteId}`} class="text-blue-600 dark:text-blue-400 hover:underline text-sm">&larr; Back to site deployments</a>
 </div>
 
-<h1 class="text-2xl font-bold mb-6 flex items-center">
-    File Browser: <span class="font-mono text-lg font-normal ml-2 text-gray-500">{deploymentId}</span>
-</h1>
+<div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold flex items-center">
+        Deployment Manifest: <span class="font-mono text-lg font-normal ml-2 text-gray-500">{deploymentId}</span>
+    </h1>
+    <span class="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300 border border-gray-300 dark:border-gray-700">
+        Immutable Snapshot
+    </span>
+</div>
 
 {#if error}
     <p class="text-red-500">{error}</p>
@@ -153,40 +87,13 @@
             {/each}
         </div>
 
-        <!-- Dropzone -->
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="card p-6 border-dashed border-2 text-center transition-colors cursor-pointer {isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 dark:border-[#30363d] hover:bg-gray-50 dark:hover:bg-gray-800/50 dark:bg-[#0d1117]'}"
-            ondragover={(e) => { e.preventDefault(); isDragging = true; }}
-            ondragleave={(e) => { e.preventDefault(); isDragging = false; }}
-            ondrop={handleDrop}
-            onclick={() => fileInput?.click()}>
-            
-            <input type="file" class="hidden" bind:this={fileInput} onchange={handleFileSelect} />
-            
-            {#if isUploading}
-                <div class="py-4">
-                    <p class="font-medium text-blue-600 dark:text-blue-400 mb-1">Uploading file...</p>
-                </div>
-            {:else}
-                <div class="py-4 flex flex-col items-center">
-                    <svg class="h-8 w-8 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
-                    <p class="font-medium mb-1 text-sm">Drop a file here to upload to <span class="font-bold">{currentPath ? currentPath : 'Root'}</span> folder</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">Or click to browse</p>
-                </div>
-            {/if}
-        </div>
-
-        <!-- File List -->
+        <!-- File List (Read-Only) -->
         <div class="card overflow-hidden">
             <table class="w-full text-left border-collapse">
                 <thead>
                     <tr class="bg-gray-50 dark:bg-gray-800/50 border-b border-[#d0d7de] dark:border-[#30363d]">
                         <th class="py-2 px-4 font-medium text-sm text-gray-600 dark:text-gray-400">Name</th>
                         <th class="py-2 px-4 font-medium text-sm text-gray-600 dark:text-gray-400 text-right">Size</th>
-                        <th class="py-2 px-4 font-medium text-sm text-gray-600 dark:text-gray-400 text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -196,18 +103,16 @@
                             parts.pop();
                             currentPath = parts.join('/');
                         }}>
-                            <td class="py-2 px-4 text-sm font-medium flex items-center">
+                            <td class="py-2 px-4 text-sm font-medium flex items-center" colspan="2">
                                 <svg class="w-4 h-4 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
                                 ..
                             </td>
-                            <td class="py-2 px-4 text-sm text-right text-gray-500"></td>
-                            <td class="py-2 px-4 text-right"></td>
                         </tr>
                     {/if}
 
                     {#if visibleItems.length === 0}
                         <tr>
-                            <td colspan="3" class="py-6 px-4 text-center text-sm text-gray-500">This folder is empty.</td>
+                            <td colspan="2" class="py-6 px-4 text-center text-sm text-gray-500">This folder is empty.</td>
                         </tr>
                     {/if}
                     {#each visibleItems as file}
@@ -225,13 +130,8 @@
                                     </div>
                                 {/if}
                             </td>
-                            <td class="py-2 px-4 text-sm text-right text-gray-500">
+                            <td class="py-2 px-4 text-sm text-right text-gray-500 font-mono">
                                 {file.is_dir ? '--' : (file.size / 1024).toFixed(1) + ' KB'}
-                            </td>
-                            <td class="py-2 px-4 text-right">
-                                <button class="text-red-500 hover:text-red-700 text-xs font-medium" onclick={() => deleteFile(file.path)}>
-                                    Delete
-                                </button>
                             </td>
                         </tr>
                     {/each}
