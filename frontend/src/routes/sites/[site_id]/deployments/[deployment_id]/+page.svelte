@@ -40,7 +40,7 @@
     async function loadFiles() {
         loading = true;
         try {
-            files = await pb.send(`/api/mistatic/deploy/${siteId}/${deploymentId}/files`);
+            files = await pb.send(`/api/mistatic/deploy/${siteId}/${deploymentId}/files`, {});
         } catch (err) {
             const e = /** @type {any} */ (err);
             error = e?.data?.error || e?.message || 'Failed to load files';

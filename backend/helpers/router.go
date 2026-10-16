@@ -21,6 +21,7 @@ const siteRouteCacheTTL = 5 * time.Minute
 type siteRoute struct {
 	siteID                string
 	deploymentID          string
+	indexDocument         string
 	spaFallback           bool
 	isPublic              bool
 	disableRequestLogging bool
@@ -261,21 +262,36 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 			}
 		}
 
-		relativePath := strings.TrimPrefix(path.Clean("/"+reqPath), "/")
-		if relativePath == "" || relativePath == "." {
-			relativePath = "index.html"
-		}
-
-		fullPath := filepath.Join(siteDir, filepath.FromSlash(relativePath))
-		if spaFallback {
-			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-				fullPath = filepath.Join(siteDir, "index.html")
-			}
-		}
-
+		fullPath := resolveFilePath(siteDir, reqPath, route.indexDocument, spaFallback)
 		http.ServeFile(e.Response, e.Request, fullPath)
 		return nil
 	})
+}
+
+func resolveFilePath(siteDir string, reqPath string, indexDoc string, spaFallback bool) string {
+	indexDoc = cleanIndexDocument(indexDoc)
+
+	relativePath := strings.TrimPrefix(path.Clean("/"+reqPath), "/")
+	if relativePath == "" || relativePath == "." {
+		relativePath = indexDoc
+	}
+
+	fullPath := filepath.Join(siteDir, filepath.FromSlash(relativePath))
+
+	if fi, err := os.Stat(fullPath); err == nil && fi.IsDir() {
+		dirIndex := filepath.Join(fullPath, filepath.FromSlash(indexDoc))
+		if _, err := os.Stat(dirIndex); err == nil {
+			fullPath = dirIndex
+		}
+	}
+
+	if spaFallback {
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			fullPath = filepath.Join(siteDir, filepath.FromSlash(indexDoc))
+		}
+	}
+
+	return fullPath
 }
 
 func resolveHostToSite(app core.App, host string, rootDomain string) (siteRoute, error) {
@@ -315,10 +331,21 @@ func routeFromRecord(record *core.Record) siteRoute {
 	return siteRoute{
 		siteID:                record.Id,
 		deploymentID:          record.GetString("active_deployment"),
+		indexDocument:         record.GetString("index_document"),
 		spaFallback:           record.GetBool("spa_fallback"),
 		isPublic:              record.GetBool("is_public"),
 		disableRequestLogging: record.GetBool("disable_request_logging"),
 	}
+}
+
+func cleanIndexDocument(doc string) string {
+	doc = strings.TrimSpace(doc)
+	doc = strings.TrimPrefix(doc, "/")
+	doc = path.Clean(doc)
+	if doc == "" || doc == "." || strings.HasPrefix(doc, "..") {
+		return "index.html"
+	}
+	return doc
 }
 
 func getCachedSiteRoute(host string) (siteRoute, bool) {

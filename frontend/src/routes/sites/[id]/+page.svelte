@@ -34,13 +34,31 @@
     
     /** @type {HTMLInputElement | null} */
     let fileInput = $state(null);
+    let indexDocInput = $state('');
+    let isSavingIndexDoc = $state(false);
     
     async function loadData() {
         site = await pb.collection('sites').getOne(siteId);
+        indexDocInput = site.index_document || 'index.html';
         deployments = await pb.collection('deployments').getFullList({ filter: `site="${siteId}"`, sort: '-created' });
         domains = await pb.collection('custom_domains').getFullList({ filter: `site="${siteId}"` });
         
         await loadLogs();
+    }
+
+    async function updateIndexDocument() {
+        if (!site) return;
+        isSavingIndexDoc = true;
+        try {
+            const doc = indexDocInput.trim() || 'index.html';
+            site = await pb.collection('sites').update(site.id, { index_document: doc });
+            indexDocInput = site.index_document || 'index.html';
+        } catch (err) {
+            console.error('Failed to update index document', err);
+            alert('Failed to update index document');
+        } finally {
+            isSavingIndexDoc = false;
+        }
     }
 
     async function loadLogs() {
@@ -459,6 +477,41 @@
         <div class="space-y-6">
             <div class="card p-4">
                 <h3 class="font-semibold mb-3">Settings</h3>
+                <div class="mb-4">
+                    <label for="index_document" class="block text-sm font-medium mb-1">Index Document</label>
+                    <div class="flex space-x-2">
+                        <input id="index_document" type="text"
+                            bind:value={indexDocInput}
+                            class="flex-1 border border-gray-300 dark:border-[#30363d] dark:bg-[#0d1117] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500 dark:focus:border-blue-500"
+                            placeholder="index.html"
+                        />
+                        <button 
+                            type="button"
+                            class="btn-primary text-xs px-3 py-1.5"
+                            disabled={isSavingIndexDoc}
+                            onclick={updateIndexDocument}
+                        >
+                            {isSavingIndexDoc ? 'Saving...' : 'Save'}
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Default file served for root and directory requests (e.g. index.html, home.html)</p>
+                </div>
+
+                <label class="flex items-center space-x-2 text-sm cursor-pointer mb-3">
+                    <input type="checkbox" class="rounded border-gray-300 dark:border-[#30363d]"
+                        checked={site.spa_fallback}
+                        onchange={async (e) => {
+                            const target = /** @type {HTMLInputElement} */ (e.target);
+                            try {
+                                site = await pb.collection('sites').update(site.id, { spa_fallback: target.checked });
+                            } catch (err) {
+                                alert('Failed to update SPA fallback');
+                                target.checked = !target.checked;
+                            }
+                        }}
+                    />
+                    <span>Enable SPA fallback</span>
+                </label>
                 <label class="flex items-center space-x-2 text-sm cursor-pointer mb-3">
                     <input type="checkbox" class="rounded border-gray-300 dark:border-[#30363d]"
                         checked={site.is_public}

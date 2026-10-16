@@ -6,6 +6,7 @@
     
     let name = $state('');
     let subdomain = $derived(name.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, ''));
+    let index_document = $state('index.html');
     let spa_fallback = $state(false);
     let is_public = $state(true);
     let loading = $state(false);
@@ -18,6 +19,7 @@
             const record = await pb.collection('sites').create({
                 name,
                 subdomain,
+                index_document: index_document.trim() || 'index.html',
                 spa_fallback,
                 is_public,
                 user: pb.authStore.model.id
@@ -60,9 +62,15 @@
                 </div>
             </div>
 
+            <div>
+                <label for="index_document" class="block text-sm font-medium mb-1">Index Document</label>
+                <input id="index_document" type="text" bind:value={index_document} class="w-full border border-gray-300 dark:border-[#30363d] dark:bg-[#0d1117] rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 dark:focus:border-blue-500" placeholder="index.html" />
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Default file served for root and directory requests (e.g. index.html, home.html)</p>
+            </div>
+
             <div class="flex items-center mt-2">
                 <input id="spa_fallback" type="checkbox" bind:checked={spa_fallback} class="mr-2" />
-                <label for="spa_fallback" class="text-sm">Enable SPA Fallback (route 404s to index.html)</label>
+                <label for="spa_fallback" class="text-sm">Enable SPA Fallback (route 404s to {index_document.trim() || 'index.html'})</label>
             </div>
 
             <div class="flex items-center mt-2">
