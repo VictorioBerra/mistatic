@@ -36,7 +36,8 @@
 	/** @type {HTMLInputElement | null} */
 	let fileInput = $state(null);
 	let indexDocInput = $state('');
-	let isSavingIndexDoc = $state(false);
+	let isSavingSettings = $state(false);
+	let savedFeedback = $state(false);
 
 	async function loadData() {
 		site = await pb.collection('sites').getOne(siteId);
@@ -49,18 +50,28 @@
 		await loadLogs();
 	}
 
-	async function updateIndexDocument() {
+	async function saveSettings() {
 		if (!site) return;
-		isSavingIndexDoc = true;
+		isSavingSettings = true;
+		savedFeedback = false;
 		try {
 			const doc = indexDocInput.trim() || 'index.html';
-			site = await pb.collection('sites').update(site.id, { index_document: doc });
+			site = await pb.collection('sites').update(site.id, {
+				index_document: doc,
+				spa_fallback: site.spa_fallback,
+				is_public: site.is_public,
+				enable_request_logging: site.enable_request_logging
+			});
 			indexDocInput = site.index_document || 'index.html';
+			savedFeedback = true;
+			setTimeout(() => {
+				savedFeedback = false;
+			}, 2000);
 		} catch (err) {
-			console.error('Failed to update index document', err);
-			alert('Failed to update index document');
+			console.error('Failed to update settings', err);
+			alert('Failed to update settings');
 		} finally {
-			isSavingIndexDoc = false;
+			isSavingSettings = false;
 		}
 	}
 
@@ -638,85 +649,65 @@
 		<div class="space-y-6">
 			<div class="card p-4">
 				<h3 class="mb-3 font-semibold">Settings</h3>
-				<div class="mb-4">
-					<label for="index_document" class="mb-1 block text-sm font-medium">Index Document</label>
-					<div class="flex space-x-2">
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						saveSettings();
+					}}
+					class="space-y-3"
+				>
+					<div>
+						<label for="index_document" class="mb-1 block text-sm font-medium">Index Document</label
+						>
 						<input
 							id="index_document"
 							type="text"
 							bind:value={indexDocInput}
-							class="flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none dark:border-[#30363d] dark:bg-[#0d1117] dark:focus:border-blue-500"
+							class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none dark:border-[#30363d] dark:bg-[#0d1117] dark:focus:border-blue-500"
 							placeholder="index.html"
 						/>
+						<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+							Default file served for root and directory requests (e.g. index.html, home.html)
+						</p>
+					</div>
+
+					<label class="flex cursor-pointer items-center space-x-2 text-sm">
+						<input
+							type="checkbox"
+							class="rounded border-gray-300 dark:border-[#30363d]"
+							bind:checked={site.spa_fallback}
+						/>
+						<span>Enable SPA fallback</span>
+					</label>
+
+					<label class="flex cursor-pointer items-center space-x-2 text-sm">
+						<input
+							type="checkbox"
+							class="rounded border-gray-300 dark:border-[#30363d]"
+							bind:checked={site.is_public}
+						/>
+						<span>{site.is_public ? 'Public site' : 'Private site'}</span>
+					</label>
+
+					<label class="flex cursor-pointer items-center space-x-2 text-sm">
+						<input
+							type="checkbox"
+							class="rounded border-gray-300 dark:border-[#30363d]"
+							bind:checked={site.enable_request_logging}
+						/>
+						<span>Enable request logging</span>
+					</label>
+
+					<div class="border-t border-gray-100 pt-3 dark:border-[#30363d]">
 						<button
-							type="button"
-							class="btn-primary px-3 py-1.5 text-xs"
-							disabled={isSavingIndexDoc}
-							onclick={updateIndexDocument}
+							type="submit"
+							class="btn-primary w-full py-1.5 text-sm"
+							disabled={isSavingSettings}
 						>
-							{isSavingIndexDoc ? 'Saving...' : 'Save'}
+							{isSavingSettings ? 'Saving...' : savedFeedback ? 'Saved!' : 'Save Settings'}
 						</button>
 					</div>
-					<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-						Default file served for root and directory requests (e.g. index.html, home.html)
-					</p>
-				</div>
-
-				<label class="mb-3 flex cursor-pointer items-center space-x-2 text-sm">
-					<input
-						type="checkbox"
-						class="rounded border-gray-300 dark:border-[#30363d]"
-						checked={site.spa_fallback}
-						onchange={async (e) => {
-							const target = /** @type {HTMLInputElement} */ (e.target);
-							try {
-								site = await pb
-									.collection('sites')
-									.update(site.id, { spa_fallback: target.checked });
-							} catch {
-								alert('Failed to update SPA fallback');
-								target.checked = !target.checked;
-							}
-						}}
-					/>
-					<span>Enable SPA fallback</span>
-				</label>
-				<label class="mb-3 flex cursor-pointer items-center space-x-2 text-sm">
-					<input
-						type="checkbox"
-						class="rounded border-gray-300 dark:border-[#30363d]"
-						checked={site.is_public}
-						onchange={async (e) => {
-							const target = /** @type {HTMLInputElement} */ (e.target);
-							try {
-								site = await pb.collection('sites').update(site.id, { is_public: target.checked });
-							} catch {
-								alert('Failed to update site visibility');
-								target.checked = !target.checked;
-							}
-						}}
-					/>
-					<span>{site.is_public ? 'Public site' : 'Private site'}</span>
-				</label>
-				<label class="flex cursor-pointer items-center space-x-2 text-sm">
-					<input
-						type="checkbox"
-						class="rounded border-gray-300 dark:border-[#30363d]"
-						checked={site.disable_request_logging}
-						onchange={async (e) => {
-							const target = /** @type {HTMLInputElement} */ (e.target);
-							try {
-								site = await pb
-									.collection('sites')
-									.update(site.id, { disable_request_logging: target.checked });
-							} catch {
-								alert('Failed to update setting');
-								target.checked = !target.checked;
-							}
-						}}
-					/>
-					<span>Disable request logging</span>
-				</label>
+				</form>
 			</div>
 
 			<div class="card p-4">

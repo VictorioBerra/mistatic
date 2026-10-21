@@ -24,7 +24,7 @@ type siteRoute struct {
 	indexDocument         string
 	spaFallback           bool
 	isPublic              bool
-	disableRequestLogging bool
+	enableRequestLogging  bool
 }
 
 type siteRouteCacheEntry struct {
@@ -169,8 +169,8 @@ func ServeStaticSite(se *core.ServeEvent, distDirFS fs.FS) {
 
 		// Fire and forget logging
 		defer func() {
-			// Check if logging is disabled for this site
-			if !route.disableRequestLogging {
+			// Check if logging is enabled for this site
+			if route.enableRequestLogging {
 				duration := time.Since(start).Milliseconds()
 
 				// Determine real IP
@@ -334,7 +334,7 @@ func routeFromRecord(record *core.Record) siteRoute {
 		indexDocument:         record.GetString("index_document"),
 		spaFallback:           record.GetBool("spa_fallback"),
 		isPublic:              record.GetBool("is_public"),
-		disableRequestLogging: record.GetBool("disable_request_logging"),
+		enableRequestLogging:  record.GetBool("enable_request_logging"),
 	}
 }
 

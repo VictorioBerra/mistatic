@@ -125,6 +125,26 @@ func TestRouteFromRecordIndexDocument(t *testing.T) {
 	}
 }
 
+func TestRouteFromRecordEnableRequestLogging(t *testing.T) {
+	sitesCollection := core.NewBaseCollection("sites")
+	sitesCollection.Fields.Add(&core.BoolField{Name: "enable_request_logging"})
+
+	// Defaults to false (opt-in)
+	recordDefault := core.NewRecord(sitesCollection)
+	routeDefault := routeFromRecord(recordDefault)
+	if routeDefault.enableRequestLogging {
+		t.Fatalf("expected enableRequestLogging to be false by default")
+	}
+
+	// Enabled
+	recordEnabled := core.NewRecord(sitesCollection)
+	recordEnabled.Set("enable_request_logging", true)
+	routeEnabled := routeFromRecord(recordEnabled)
+	if !routeEnabled.enableRequestLogging {
+		t.Fatalf("expected enableRequestLogging to be true")
+	}
+}
+
 func TestResolveFilePath(t *testing.T) {
 	tempDir := t.TempDir()
 

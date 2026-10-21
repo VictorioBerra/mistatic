@@ -15,6 +15,7 @@
 	let index_document = $state('index.html');
 	let spa_fallback = $state(false);
 	let is_public = $state(true);
+	let enable_request_logging = $state(false);
 	let loading = $state(false);
 	let error = $state('');
 
@@ -28,6 +29,7 @@
 				index_document: index_document.trim() || 'index.html',
 				spa_fallback,
 				is_public,
+				enable_request_logging,
 				user: pb.authStore.model?.id
 			});
 			goto(`/sites/${record.id}`);
@@ -111,6 +113,16 @@
 				<label for="is_public" class="text-sm"
 					>Public Site (Uncheck to require authentication)</label
 				>
+			</div>
+
+			<div class="mt-2 flex items-center">
+				<input
+					id="enable_request_logging"
+					type="checkbox"
+					bind:checked={enable_request_logging}
+					class="mr-2"
+				/>
+				<label for="enable_request_logging" class="text-sm">Enable Request Logging</label>
 			</div>
 
 			<div class="border-t border-gray-100 pt-4 dark:border-[#30363d]">
