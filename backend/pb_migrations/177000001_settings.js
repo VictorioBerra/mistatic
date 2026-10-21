@@ -82,7 +82,7 @@ migrate(
         console.error("Failed to auto-create superuser:", err);
       }
     }
-  };,
+  },
   (app) => {
     // no down migration
   },

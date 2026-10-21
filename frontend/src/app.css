@@ -1,25 +1,32 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-@import "tailwindcss";
+@import 'tailwindcss';
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --color-primary: #2da44e;
-  --color-primary-hover: #2c974b;
+	--color-primary: #2da44e;
+	--color-primary-hover: #2c974b;
 }
 
 body {
-  @apply bg-[#f6f8fa] text-[#24292f] dark:bg-[#0d1117] dark:text-[#c9d1d9];
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+	@apply bg-[#f6f8fa] text-[#24292f] dark:bg-[#0d1117] dark:text-[#c9d1d9];
+	font-family:
+		'Inter',
+		-apple-system,
+		BlinkMacSystemFont,
+		'Segoe UI',
+		Helvetica,
+		Arial,
+		sans-serif;
 }
 
 .btn-primary {
-  @apply bg-[#2da44e] text-white px-3 py-1 rounded-md text-sm font-medium border border-[rgba(27,31,36,0.15)] hover:bg-[#2c974b] transition-colors;
+	@apply rounded-md border border-[rgba(27,31,36,0.15)] bg-[#2da44e] px-3 py-1 text-sm font-medium text-white transition-colors hover:bg-[#2c974b];
 }
 
 .btn-default {
-  @apply bg-[#f6f8fa] text-[#24292f] px-3 py-1 rounded-md text-sm font-medium border border-[#d0d7de] hover:bg-[#f3f4f6] transition-colors shadow-sm dark:bg-[#21262d] dark:text-[#c9d1d9] dark:border-[#30363d] dark:hover:bg-[#30363d];
+	@apply rounded-md border border-[#d0d7de] bg-[#f6f8fa] px-3 py-1 text-sm font-medium text-[#24292f] shadow-sm transition-colors hover:bg-[#f3f4f6] dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#c9d1d9] dark:hover:bg-[#30363d];
 }
 
 .card {
-  @apply bg-white border border-[#d0d7de] rounded-md shadow-sm dark:bg-[#161b22] dark:border-[#30363d];
+	@apply rounded-md border border-[#d0d7de] bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22];
 }
