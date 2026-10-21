@@ -102,6 +102,44 @@ To build the image locally instead, use the repository's unified multi-stage
 docker build -t mistatic .
 ```
 
+### CapRover Deployment
+
+MiStatic includes a [`captain-definition`](./captain-definition) and a packaging script [`scripts/compress.sh`](./scripts/compress.sh) for one-click deployments to [CapRover](https://caprover.com/).
+
+#### 1. Package & Deploy
+Run the compression script from anywhere in the repository:
+
+```bash
+./scripts/compress.sh
+```
+
+In the CapRover dashboard under your app's **Deployment** tab, upload the generated `mistatic_deploy.tar` via **Method 1: Tar-Ball**.
+
+#### 2. App Config & Environment Variables
+In your app's **App Configs** tab, configure:
+- `APP_DOMAIN`: The domain where you access the dashboard (e.g. `mistatic.apps.example.com`).
+- `ROOT_DOMAIN`: (Optional) The domain under which sites are hosted as subdomains (e.g. `mistatic.apps.example.com`).
+- Persistent directories:
+  - `/pb/pb_data` → `mistatic_pb_data`
+  - `/app/sites` → `mistatic_sites`
+
+#### 3. Custom Nginx Configuration (Wildcard Subdomains & SSL)
+By default, CapRover's Nginx configuration only listens for exact hostnames registered in the CapRover UI. To allow MiStatic to dynamically host on-demand subdomains (e.g. `my-project.mistatic.apps.example.com`) without registering each one manually:
+
+1. Go to your app in CapRover → **HTTP Settings** → **Edit Default Nginx Configuration**.
+2. **Add Wildcard to `server_name`**:
+   In both the port 80 and port 443 `server` blocks, add your wildcard pattern to `server_name`:
+   ```nginx
+   server_name  <%-s.publicDomain%> *.mistatic.apps.example.com;
+   ```
+3. **Configure Wildcard SSL**:
+   CapRover's automated Let's Encrypt integration uses HTTP-01 challenges, which cannot issue wildcard certificates for `*.mistatic.apps.example.com`. If you use Cloudflare, generate a Cloudflare Origin Certificate covering `*.mistatic.apps.example.com`, mount it into Nginx, and reference it:
+   ```nginx
+   ssl_certificate     /letencrypt/etc/live/cloudflare/mistatic.pem;
+   ssl_certificate_key /letencrypt/etc/live/cloudflare/mistatic.key;
+   ```
+   *(Alternatively, use CapRover's default `<%-s.crtPath%>` and `<%-s.keyPath%>` if you only access sites via path-based routing `https://APP_DOMAIN/site/<subdomain>/` or handle SSL termination upstream).*
+
 ### FAQ
 
 - Can I add a private site read-only user?
