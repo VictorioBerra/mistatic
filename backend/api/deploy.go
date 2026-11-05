@@ -12,8 +12,8 @@ import (
 
 	"mistatic/helpers"
 
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/pocketbase/pocketbase/tools/filesystem"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/tools/filesystem"
 )
 
 func RegisterDeployRoute(se *core.ServeEvent) {

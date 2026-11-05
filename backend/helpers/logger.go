@@ -3,7 +3,7 @@ package helpers
 import (
 	"log"
 
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 type LogPayload struct {

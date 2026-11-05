@@ -9,7 +9,7 @@ import (
 
 	"mistatic/helpers"
 
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 func RegisterFileRoutes(se *core.ServeEvent) {

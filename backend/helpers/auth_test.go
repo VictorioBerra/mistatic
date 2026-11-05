@@ -3,7 +3,7 @@ package helpers
 import (
 	"testing"
 
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 func TestHasAnyRole(t *testing.T) {

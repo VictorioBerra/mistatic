@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/pocketbase/pocketbase/core"
+	"ganigeorgiev.com/pocketbase/pocketbase/core"
 )
 
 func findOwnedSite(e *core.RequestEvent, siteID string) (*core.Record, error) {
